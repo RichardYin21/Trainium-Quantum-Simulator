@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from qiskit.quantum_info import random_unitary as qiskit_random_unitary
 
-import torch_xla.core.xla_model as xm
+# import torch_xla.core.xla_model as xm
 
 from timeit import default_timer as timer
 
@@ -18,14 +18,14 @@ def random_unitary(n, dtype=torch.float16):
     return (unitary, real_imag_tensor)
 
 if __name__ == "__main__":
-	device = "xla"
+	device = "cuda"
 	dtype = torch.float16
 
-	check_with_qiskit = False
+	check_with_qiskit = True
 
-	n = 3
-	m = 1
-	steps = 1
+	n = 24
+	m = 7
+	steps = 100
 
 	# define circuit
 	print("defining circuit")
@@ -43,7 +43,7 @@ if __name__ == "__main__":
 		qc = QuantumCircuitSimulator(n, targets, xla_gates).to(device)
 		result = qc(state, print_state=False)
 		result_real, result_imag = result[0], result[1]
-		xm.mark_step()
+		# xm.mark_step()
 	end = timer()
 	pytorch_time = end - start
 
@@ -56,18 +56,18 @@ if __name__ == "__main__":
 		qiskit_build_time = end - start
 
 		start = timer()
-		reference_result = simulator.simulate(device="CPU")
+		reference_result = simulator.simulate(device="GPU")
 		end = timer()
 		qiskit_time = end - start
 
-	# compare results
-	# print(result)
-	# print(reference_result)
 	print("pytorch:", pytorch_time)
 
 	if check_with_qiskit:
 		print("qiskit build:", qiskit_build_time)
 		print("qiskit:", qiskit_time)
-		# print(torch.linalg.norm(result - torch.tensor(reference_result.data, dtype=torch.complex128).to(device)))
-		# print(torch.linalg.norm(result.to("cpu") - torch.tensor(reference_result.data, dtype=torch.complex128)))
+		result = result_real + (1j) * result_imag
+		result = result.flatten()
+		print(torch.linalg.norm(result - torch.tensor(reference_result.data, dtype=torch.complex128).to(device)))
+		print(torch.linalg.norm(result.to("cpu") - torch.tensor(reference_result.data, dtype=torch.complex128)))
 		print(result.to("cpu"))
+		print(reference_result)

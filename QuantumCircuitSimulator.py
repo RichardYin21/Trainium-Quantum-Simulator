@@ -27,11 +27,11 @@ class QuantumCircuitSimulator(nn.Module):
                 inv_permutation[dim] = i
 
             state = torch.permute(state, permutation)
-
             state = state.reshape((2, -1, 2**len(target)))
-            state = complex_matrix_mult(gate, state)
-            state = state.reshape([2] + [2]*self.num_qubits)
 
+            state = complex_matrix_mult(state, gate.transpose(1, 2))
+
+            state = state.reshape([2] + [2]*self.num_qubits)
             state = torch.permute(state, inv_permutation)
 
             if print_state:
