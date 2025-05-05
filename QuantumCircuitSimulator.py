@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from ComplexMatrixMult import complex_matrix_mult
 
 from gates import *
 
@@ -20,15 +21,16 @@ class QuantumCircuitSimulator(nn.Module):
             target_axes = list(reversed(target_axes))
 
             permutation = [i for i in self.dims if i not in target_axes] + target_axes
-            inv_permutation = [0]*self.num_qubits
+            permutation = [0] + [i + 1 for i in permutation]
+            inv_permutation = [0]*(self.num_qubits+1)
             for i, dim in enumerate(permutation):
                 inv_permutation[dim] = i
 
             state = torch.permute(state, permutation)
 
-            state = state.reshape((-1, 2**len(target)))
-            state = state @ gate.T
-            state = state.reshape([2]*self.num_qubits)
+            state = state.reshape((2, -1, 2**len(target)))
+            state = complex_matrix_mult(gate, state)
+            state = state.reshape([2] + [2]*self.num_qubits)
 
             state = torch.permute(state, inv_permutation)
 
