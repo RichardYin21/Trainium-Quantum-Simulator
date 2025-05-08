@@ -1,31 +1,30 @@
 from QuantumCircuitSimulator import QuantumCircuitSimulator
 from QiskitSimulator import QiskitSimulator
 from gates import *
+from RandomUnitary import random_unitary
 
 import random
 import torch
 import numpy as np
 from qiskit.quantum_info import random_unitary as qiskit_random_unitary
 
-# import torch_xla.core.xla_model as xm
+import torch_neuronx
+import torch_xla.core.xla_model as xm
 
 from timeit import default_timer as timer
 
-def random_unitary(n, dtype=torch.float16):
-    unitary = qiskit_random_unitary(2**n).data
-    # Stack the real and imaginary parts along a new dimension
-    real_imag_tensor = torch.tensor(np.stack([unitary.real, unitary.imag], axis=0), dtype=dtype)
-    return (unitary, real_imag_tensor)
-
 if __name__ == "__main__":
-	device = "cuda"
+	# import os
+	# os.environ['NEURON_FRAMEWORK_DEBUG'] = "1"
+
+	device = "xla"
 	dtype = torch.float16
 
-	check_with_qiskit = True
+	check_with_qiskit = False
 
-	n = 24
-	m = 7
-	steps = 100
+	n = 6
+	m = 2
+	steps = 10
 
 	# define circuit
 	print("defining circuit")
@@ -34,16 +33,30 @@ if __name__ == "__main__":
 	qiskit_gates = [unitary[0] for unitary in unitaries]
 	xla_gates = [unitary[1] for unitary in unitaries]
 
+	# sim = QuantumCircuitSimulator(n, targets, xla_gates)
+	# sim.eval()
+	# state = torch.zeros([2] + [2]*n, dtype=dtype)
+	# state[tuple([0] + [0]*n)] = 1
+
+	# print("tracing")
+	# start = timer()
+	# trace = torch_neuronx.trace(sim, state, compiler_args = "--optlevel 1")
+	# torch.jit.save(trace, "sim.pt")
+	# end = timer()
+	# print("trace time:", end - start)
+
 	# PyTorch implementation
 	print("starting pytorch implementation")
 	start = timer()
 	with torch.no_grad():
+		print("init state")
 		state = torch.zeros([2] + [2]*n, dtype=dtype).to(device) # store real and imaginary part separately
 		state[tuple([0] + [0]*n)] = 1
+		xm.mark_step()
 		qc = QuantumCircuitSimulator(n, targets, xla_gates).to(device)
 		result = qc(state, print_state=False)
 		result_real, result_imag = result[0], result[1]
-		# xm.mark_step()
+		xm.mark_step()
 	end = timer()
 	pytorch_time = end - start
 

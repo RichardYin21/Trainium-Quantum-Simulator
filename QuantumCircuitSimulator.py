@@ -4,6 +4,8 @@ from ComplexMatrixMult import complex_matrix_mult
 
 from gates import *
 
+import torch_xla.core.xla_model as xm
+
 class QuantumCircuitSimulator(nn.Module):
     def __init__(self, num_qubits, targets, gates):
         super().__init__()
@@ -15,6 +17,7 @@ class QuantumCircuitSimulator(nn.Module):
 
     def forward(self, state, print_state = True):
         for step, target, gate in zip(range(len(self.targets)), self.targets, self.gates):
+            print(step)
             # align with qiskit convention
             # i don't actually know why this works I just asked ChatGPT
             target_axes = [self.num_qubits - 1 - q for q in target]
@@ -33,6 +36,8 @@ class QuantumCircuitSimulator(nn.Module):
 
             state = state.reshape([2] + [2]*self.num_qubits)
             state = torch.permute(state, inv_permutation)
+
+            xm.mark_step()
 
             if print_state:
                 print(step, state.flatten())
