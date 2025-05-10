@@ -1,86 +1,47 @@
-from QuantumCircuitSimulator import QuantumCircuitSimulator
-from QiskitSimulator import QiskitSimulator
-from gates import *
+from QuantumCircuitSimulator import QuantumCircuitSimulator as QuantumCircuitSimulator
 from RandomUnitary import random_unitary
 
 import random
 import torch
-import numpy as np
-from qiskit.quantum_info import random_unitary as qiskit_random_unitary
 
-import torch_neuronx
 import torch_xla.core.xla_model as xm
 
-from timeit import default_timer as timer
-
 if __name__ == "__main__":
-	# import os
-	# os.environ['NEURON_FRAMEWORK_DEBUG'] = "1"
+	import os
+	os.system('export NEURON_CC_FLAGS="--optlevel 1"') # maybe it'll make the initial XLA compilations less painful idk
 
-	device = "xla"
-	dtype = torch.float16
+	device = "xla" # use neuroncore device for matrix mult
+	dtype = torch.float16 # neuroncore v2 devices support "cFP8, FP16, BF16, TF32, FP32, INT8, INT16, and INT32"
 
-	check_with_qiskit = False
+	n = 17 # number of qubits
+	m = 7 # gate size
+	steps = 100 # number of gates in quantum circuit
 
-	n = 6
-	m = 2
-	steps = 10
-
-	# define circuit
-	print("defining circuit")
+	# generate random circuit for testing
+	print("generating circuit")
 	targets = [random.sample(range(n), k=m) for i in range(steps)]
-	unitaries = [random_unitary(m, dtype=dtype) for _ in range(steps)]
-	qiskit_gates = [unitary[0] for unitary in unitaries]
+	unitaries = [random_unitary(m, dtype=dtype, device=device) for _ in range(steps)]
+	# qiskit_gates = [unitary[0] for unitary in unitaries]
 	xla_gates = [unitary[1] for unitary in unitaries]
 
-	# sim = QuantumCircuitSimulator(n, targets, xla_gates)
-	# sim.eval()
-	# state = torch.zeros([2] + [2]*n, dtype=dtype)
-	# state[tuple([0] + [0]*n)] = 1
-
-	# print("tracing")
-	# start = timer()
-	# trace = torch_neuronx.trace(sim, state, compiler_args = "--optlevel 1")
-	# torch.jit.save(trace, "sim.pt")
-	# end = timer()
-	# print("trace time:", end - start)
-
-	# PyTorch implementation
+	# implementation
 	print("starting pytorch implementation")
-	start = timer()
-	with torch.no_grad():
+	with torch.no_grad(): # not intending to perform backprop or anything
+		# represent the state vector as an order n tensor
+		# each dim is size 2, representing a certain qubit's |0> and |1>
+		# since neuroncore doesn't natively support complex numbers, we store the real and imaginary parts separately
+		# state[0,:] stores the real part, state[1,:] stores the imaginary part
 		print("init state")
-		state = torch.zeros([2] + [2]*n, dtype=dtype).to(device) # store real and imaginary part separately
-		state[tuple([0] + [0]*n)] = 1
+		state = torch.zeros([2] + [2]*n, dtype=dtype, device=device) # directly init state vector on xla device to avoid absurdly long XLA compilation
+		state[tuple([0] + [0]*n)] = 1 # init the real part of |0^n> to 1
 		xm.mark_step()
-		qc = QuantumCircuitSimulator(n, targets, xla_gates).to(device)
-		result = qc(state, print_state=False)
+
+		# simulate
+		qc = QuantumCircuitSimulator(n, m) # simulator for an n-qubit program with m-qubit gates
+		result = qc(state, targets, xla_gates) # perform simulation
+
+		# print result
+		result = result.to("cpu") # move to cpu to be able to work with complex numeric type
 		result_real, result_imag = result[0], result[1]
-		xm.mark_step()
-	end = timer()
-	pytorch_time = end - start
-
-	# use Qiskit as reference implementation
-	if check_with_qiskit:
-		print("starting qiskit implementation")
-		start = timer()
-		simulator = QiskitSimulator(n, targets, qiskit_gates)
-		end = timer()
-		qiskit_build_time = end - start
-
-		start = timer()
-		reference_result = simulator.simulate(device="GPU")
-		end = timer()
-		qiskit_time = end - start
-
-	print("pytorch:", pytorch_time)
-
-	if check_with_qiskit:
-		print("qiskit build:", qiskit_build_time)
-		print("qiskit:", qiskit_time)
 		result = result_real + (1j) * result_imag
-		result = result.flatten()
-		print(torch.linalg.norm(result - torch.tensor(reference_result.data, dtype=torch.complex128).to(device)))
-		print(torch.linalg.norm(result.to("cpu") - torch.tensor(reference_result.data, dtype=torch.complex128)))
-		print(result.to("cpu"))
-		print(reference_result)
+		print(result.flatten())

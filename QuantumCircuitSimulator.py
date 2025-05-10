@@ -2,44 +2,69 @@ import torch
 import torch.nn as nn
 from ComplexMatrixMult import complex_matrix_mult
 
-from gates import *
-
 import torch_xla.core.xla_model as xm
 
 class QuantumCircuitSimulator(nn.Module):
-    def __init__(self, num_qubits, targets, gates):
-        super().__init__()
-        self.num_qubits = num_qubits
-        self.targets = targets
-        self.gates = nn.ParameterList(gates)
+	def __init__(self, num_qubits, num_qubits_gate, device="xla"):
+		super().__init__()
+		self.num_qubits = num_qubits
+		self.num_qubits_gate = num_qubits_gate
+		self.dims = list(range(self.num_qubits))
 
-        self.dims = list(range(self.num_qubits))
+		# specify the device to perform major computations on
+		# (in case you want to try on gpu, but there's still xla/neuroncore specific code in this file that needs to be removed before running)
+		self.device = device
 
-    def forward(self, state, print_state = True):
-        for step, target, gate in zip(range(len(self.targets)), self.targets, self.gates):
-            print(step)
-            # align with qiskit convention
-            # i don't actually know why this works I just asked ChatGPT
-            target_axes = [self.num_qubits - 1 - q for q in target]
-            target_axes = list(reversed(target_axes))
+	def forward(self, state, targets, gates):
+		xm.mark_step()
+		for step, target, gate in zip(range(len(targets)), targets, gates):
+			print("step:", step)
 
-            permutation = [i for i in self.dims if i not in target_axes] + target_axes
-            permutation = [0] + [i + 1 for i in permutation]
-            inv_permutation = [0]*(self.num_qubits+1)
-            for i, dim in enumerate(permutation):
-                inv_permutation[dim] = i
+			# align with qiskit convention for easier checking of results
+			target_axes = [self.num_qubits - 1 - q for q in target]
+			target_axes = list(reversed(target_axes))
 
-            state = torch.permute(state, permutation)
-            state = state.reshape((2, -1, 2**len(target)))
+			# determine how to permute the qubits to prepare for efficient application of the gate matrix
+			permutation = [i for i in self.dims if i not in target_axes] + target_axes
+			permutation = [0] + [i + 1 for i in permutation] # don't permute the real/dim axis
 
-            state = complex_matrix_mult(state, gate.transpose(1, 2))
+			# suboptimal way of computing the inverse permutation
+			inv_permutation = [0]*(self.num_qubits+1)
+			for i, dim in enumerate(permutation):
+				inv_permutation[dim] = i
 
-            state = state.reshape([2] + [2]*self.num_qubits)
-            state = torch.permute(state, inv_permutation)
+			# hack: different permutations result in different xla computation graphs (which take forever to compile!!!)
+			# move permutation to CPU to avoid needing to compile all 7 gigajillion possible permutations
+			# the permutation operation itself is efficient on CPU as it only edits the tensor stride metadata
+			# see: https://docs.pytorch.org/docs/stable/generated/torch.Tensor.stride.html, https://github.com/pytorch/pytorch/blob/a6170573c898a1367517d8daf8e777abaf96f752/aten/src/ATen/native/TensorShape.cpp#L367-L385
+			# (note that tensors on NeuronCore may or may not have the same/similar implementation for permute)
+			# a potential concern with this hack is that the moving of tensors between devices could be quite expensive
 
-            xm.mark_step()
+			# alternative idea discussed: chain multiple smaller permutations together
+			# if we permute (swap) only 2 axes at a time, a total of num_qubits_gate swaps would be needed per permutation
+			# num_qubits * num_qubits_gate swap operations to compile, instead of 7 gigajillion permutations
+			state = torch.permute(state.to("cpu"), permutation).to(self.device)
 
-            if print_state:
-                print(step, state.flatten())
+			# apply $I_2^{\otimes n-m} \otimes U_m$ on the state vector
+			# because $I_2^{\otimes n-m} \otimes U_m$ is a block diagonal matrix, this operation can be performed more efficiently
+			# as U applied to each 2^m-sized partition of the state vector
 
-        return state
+			# reshape so that each state vector partition is a row vector
+			state = state.reshape((2, -1, 2**self.num_qubits_gate))
+
+			# right-multiply by U^T
+			# note that we transpose dims 1 and 2 of the gate because dim 0 determines the real/imaginary part
+			# also note that transposing on CPU is probably more efficient (currently we are transposing on XLA)
+			# this is _the_ place where we would parallelize across multiple NeuronCores
+			state = complex_matrix_mult(state, gate.transpose(1, 2))
+
+			# reshape back to original shape
+			state = state.reshape([2] + [2]*self.num_qubits)
+
+			# restore the qubit order back to normal (using the same permutation hack as before)
+			state = torch.permute(state.to("cpu"), inv_permutation).to(self.device)
+
+			# compile one iteration of the loop for reuse
+			# (currently probably unncessary due to the permute hacks forcing earlier compilation from moving tensors to CPU)
+			xm.mark_step()
+		return state
