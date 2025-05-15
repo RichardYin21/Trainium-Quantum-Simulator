@@ -13,7 +13,7 @@ if __name__ == "__main__":
 	device = "xla" # use neuroncore device for matrix mult
 	dtype = torch.float16 # neuroncore v2 devices support "cFP8, FP16, BF16, TF32, FP32, INT8, INT16, and INT32"
 
-	n = 24 # number of qubits
+	n = 20 # number of qubits
 	m = 7 # gate size
 	steps = 1000 # number of gates in quantum circuit
 
@@ -38,8 +38,8 @@ if __name__ == "__main__":
 		state[tuple([0] + [0]*n)] = 1 # init the real part of |0^n> to 1
 		xm.mark_step()
 
-		start = timer()
 		# simulate
+		start = timer()
 		qc = QuantumCircuitSimulator(n, m) # simulator for an n-qubit program with m-qubit gates
 		result = qc(state, targets, xla_gates) # perform simulation
 		end = timer()
